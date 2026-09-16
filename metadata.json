@@ -1,8 +1,0 @@
-{
-  "name": "Virtual Herbarium",
-  "description": "A Virtual Herbarium list application.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
