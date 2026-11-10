@@ -41,20 +41,70 @@ export const TotpAuth: React.FC<TotpAuthProps> = ({
 
   const isVerifyingRef = useRef(false);
   const setupDataRef = useRef<SetupData | null>(null);
+  // Aborting fetch alone cannot stop an already received response from finishing.
+  const flowRef = useRef({ version: 0, active: false, verification: null as AbortController | null });
 
   useEffect(() => {
     setupDataRef.current = setupData;
   }, [setupData]);
 
   useEffect(() => {
-    if (allowSetup) {
-      setIsRegistered(false);
-      fetchSetupData();
-      setLoading(false);
-    } else {
-      checkStatus();
-    }
-  }, []);
+    let active = true;
+    const controller = new AbortController();
+    flowRef.current.version += 1;
+    flowRef.current.active = true;
+    setLoading(true);
+    setError('');
+    setOtpInput('');
+    setSetupData(null);
+    setupDataRef.current = null;
+    setIsRegistered(null);
+    isVerifyingRef.current = false;
+    setVerifying(false);
+
+    void (async () => {
+      try {
+        const res = await fetch(allowSetup ? '/api/totp/setup' : '/api/totp/status', {
+          signal: controller.signal,
+          ...(allowSetup ? {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
+            },
+            body: JSON.stringify({ username: setupUsername || 'admin' }),
+          } : {}),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || (lang === 'ko' ? 'OTP 정보를 불러오지 못했습니다.' : 'Failed to load OTP information.'));
+        if (!active) return;
+        if (allowSetup) {
+          const qrCodeUrl = data.qrCodeUrl || await import('qrcode').then(({ default: QRCode }) => (
+            QRCode.toDataURL(data.otpauthUrl, { width: 256, margin: 1 })
+          ));
+          if (!active) return;
+          const setup = { secret: data.secret, setupToken: data.setupToken || '', qrCodeUrl };
+          setupDataRef.current = setup;
+          setSetupData(setup);
+          setIsRegistered(false);
+        } else {
+          setIsRegistered(data.isRegistered);
+        }
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : 'Failed to load OTP information.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+      controller.abort();
+      flowRef.current.active = false;
+      flowRef.current.version += 1;
+      flowRef.current.verification?.abort();
+      flowRef.current.verification = null;
+    };
+  }, [allowSetup, setupUsername, authorizationToken, adminOnly, lang]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -64,60 +114,18 @@ export const TotpAuth: React.FC<TotpAuthProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  const checkStatus = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/totp/status');
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || (lang === 'ko' ? 'OTP 저장소를 확인할 수 없습니다.' : 'Failed to check the OTP store.'));
-      }
-      setIsRegistered(data.isRegistered);
-      if (!data.isRegistered && allowSetup) {
-        await fetchSetupData();
-      }
-    } catch (err) {
-      setError(err instanceof Error
-        ? err.message
-        : (lang === 'ko' ? '상태를 확인할 수 없습니다.' : 'Failed to check status.'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchSetupData = async () => {
-    try {
-      const res = await fetch('/api/totp/setup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {})
-        },
-        body: JSON.stringify({ username: setupUsername || 'admin' })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || (lang === 'ko' ? '설정 데이터를 가져올 수 없습니다.' : 'Failed to fetch setup data.'));
-        return;
-      }
-      const qrCodeUrl = data.qrCodeUrl || await import('qrcode').then(({ default: QRCode }) => (
-        QRCode.toDataURL(data.otpauthUrl, { width: 256, margin: 1 })
-      ));
-      setSetupData({
-        secret: data.secret,
-        setupToken: data.setupToken || '',
-        qrCodeUrl,
-      });
-    } catch (err) {
-      setError(lang === 'ko' ? '설정 데이터를 가져올 수 없습니다.' : 'Failed to fetch setup data.');
-    }
-  };
-
   const handleVerify = async (codeToVerify?: string) => {
     const code = (codeToVerify !== undefined ? codeToVerify : otpInput).trim();
     if (code.length !== 6) return;
+    if (!flowRef.current.active || loading || (allowSetup && (!setupDataRef.current?.secret || !setupDataRef.current?.setupToken))) return;
     if (isVerifyingRef.current) return;
 
+    const version = flowRef.current.version;
+    const controller = new AbortController();
+    flowRef.current.verification = controller;
+    const isCurrent = () => flowRef.current.active
+      && flowRef.current.version === version
+      && flowRef.current.verification === controller;
     isVerifyingRef.current = true;
     setVerifying(true);
     setError('');
@@ -139,9 +147,12 @@ export const TotpAuth: React.FC<TotpAuthProps> = ({
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyPayload)
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal,
       });
       const data = await res.json();
+      if (!isCurrent()) return;
+      if (!res.ok) throw new Error(data.error || (lang === 'ko' ? '인증 요청에 실패했습니다.' : 'Verification request failed.'));
       if (data.success) {
         if (adminOnly && data.username !== 'admin') {
           setError(lang === 'ko' ? '어드민(admin) 계정 OTP만 인증 가능합니다.' : 'Admin OTP is required.');
@@ -154,10 +165,13 @@ export const TotpAuth: React.FC<TotpAuthProps> = ({
         setOtpInput('');
       }
     } catch (err) {
-      setError(lang === 'ko' ? '인증에 실패했습니다.' : 'Verification failed.');
+      if (isCurrent()) setError(err instanceof Error ? err.message : (lang === 'ko' ? '인증에 실패했습니다.' : 'Verification failed.'));
     } finally {
-      isVerifyingRef.current = false;
-      setVerifying(false);
+      if (isCurrent()) {
+        flowRef.current.verification = null;
+        isVerifyingRef.current = false;
+        setVerifying(false);
+      }
     }
   };
 
@@ -182,6 +196,10 @@ export const TotpAuth: React.FC<TotpAuthProps> = ({
   };
 
   const handleCancelClick = async () => {
+    flowRef.current.active = false;
+    flowRef.current.version += 1;
+    flowRef.current.verification?.abort();
+    flowRef.current.verification = null;
     if (allowSetup && setupData?.secret) {
       try {
         await fetch('/api/totp/cancel-setup', {
@@ -311,7 +329,7 @@ export const TotpAuth: React.FC<TotpAuthProps> = ({
             </button>
             <button
               onClick={() => handleVerify()}
-              disabled={otpInput.length !== 6 || verifying}
+              disabled={otpInput.length !== 6 || verifying || (allowSetup && !setupData)}
               className="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 transition-colors disabled:opacity-50"
             >
               {verifying ? (lang === 'ko' ? '확인 중...' : 'Verifying...') : (lang === 'ko' ? '인증' : 'Verify')}

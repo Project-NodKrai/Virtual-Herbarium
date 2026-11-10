@@ -93,6 +93,7 @@ export default function SecurityPage() {
   if (!isAuthenticated && isRegistered && !showSetup) {
     return (
       <TotpAuth
+        key="security-login"
         lang="ko"
         adminOnly={true}
         title="보안 설정 관리자 인증"
@@ -134,6 +135,7 @@ export default function SecurityPage() {
   if (showAdminVerifyForNewOtp) {
     return (
       <TotpAuth
+        key="authorize-new-user"
         lang="ko"
         adminOnly={true}
         title="일반 OTP 추가 관리자 인증"
@@ -154,6 +156,7 @@ export default function SecurityPage() {
   if (showSetup) {
     return (
       <TotpAuth
+        key={`setup-${setupUsername}`}
         lang="ko"
         allowSetup={true}
         setupUsername={setupUsername}

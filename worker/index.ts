@@ -407,7 +407,9 @@ async function handleTotpSetup(request: Request, env: Env): Promise<Response> {
 async function handleVerifySetup(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
   const token = typeof body.token === 'string' ? body.token.trim() : '';
-  const secret = validateSecret(body.secret);
+  let secret: string;
+  try { secret = validateSecret(body.secret); }
+  catch { throw new HttpError(400, 'OTP 등록 정보가 없습니다. 등록 화면을 다시 열어주세요.'); }
   if (typeof body.setupToken !== 'string') throw new HttpError(400, '설정 세션이 없습니다.');
   const setup = await verifySignedPayload(body.setupToken, env);
   if (
