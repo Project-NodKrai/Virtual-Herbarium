@@ -91,6 +91,8 @@ Worker runtime secrets인 `TOTP_STORE_ENCRYPTION_KEY`, `AUTH_TOKEN_SECRET`, `ADM
 
 프로젝트 소유자가 다음 구성을 준비해야 합니다.
 
+현재 운영 Google 프로젝트는 AI Studio Starter 등급입니다. 이 유형은 Google이 IAM과 조직 정책을 관리하므로 로그인 계정에 서비스 계정 생성·키 발급 권한이 없습니다. [Starter Tier 공식 안내](https://docs.cloud.google.com/docs/starter-tier#upgrade-your-starter-tier-project)에 따르면 일반 프로젝트로의 전환은 결제 계정 연결 및 약관 동의를 요구합니다. 같은 프로젝트에 다른 앱의 데이터베이스도 있으므로 전환 시 이들의 비용·관리 범위까지 고려해야 합니다. 이 저장소의 변경은 프로젝트 전환, 결제 연결, IAM 변경을 수행하지 않습니다.
+
 1. Google 프로젝트 `hypnagogic-charmer-8cf5x`에 가상표본관 전용 서비스 계정을 만듭니다. 다른 앱이 공유하는 기본 Admin SDK 계정을 사용하지 않습니다.
 2. `roles/datastore.user`를 다음 IAM 조건으로 제한합니다. 다른 AI Studio 데이터베이스에는 권한을 부여하지 않습니다.
 
