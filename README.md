@@ -8,7 +8,8 @@ React, Firestore, Cloudflare Workers, R2, Workers KV, TOTP를 사용하는 가�
 - `/api/*` 요청만 `worker/index.ts`가 처리합니다.
 - 이미지는 `HERBARIUM_BUCKET` R2 바인딩을 통해 `virtual-herbarium` 버킷에 저장합니다.
 - OTP 사용자 목록은 `OTP_STATE` KV에 AES-256-GCM 암호문으로 저장합니다.
-- OTP 검증에 성공하면 5분짜리 서명 토큰을 발급합니다. 이미지 업로드·삭제 API와 OTP 관리 API는 이 토큰을 확인합니다.
+- OTP 검증에 성공하면 5분짜리 서명 토큰을 발급합니다. 표본 저장·삭제, 이미지 업로드·삭제와 OTP 관리 API는 이 토큰을 확인합니다.
+- 표본 조회는 Firestore SDK로 직접 수행하고, 쓰기는 Worker의 `/api/records/INCH-PT00000` 형태의 API를 거칩니다.
 - 조회·검색·상세 열람에는 OTP를 요구하지 않습니다.
 
 기존 `nod-krai` Worker와 `pos-db` 버킷은 이 프로젝트와 무관하며 변경하지 않습니다. 이 프로젝트는 별도 Worker 이름인 `virtual-herbarium-test`를 사용합니다.
@@ -32,6 +33,7 @@ Worker 인스턴스 메모리에 OTP 비밀값을 저장하지 않습니다. 암
 
 ```bash
 npm ci
+npm test
 npm run lint
 npm run build
 npx wrangler dev
@@ -47,8 +49,9 @@ npx wrangler dev
 - 기존 R2 버킷 binding: `HERBARIUM_BUCKET -> virtual-herbarium`
 - 새 전용 KV binding: `OTP_STATE -> virtual-herbarium-test-otp-state`
 - 시험 주소: `*.workers.dev`
+- 운영 Custom Domain: `virtual-herbarium.columbina.kr`
 
-이 프로젝트만 사용하는 `virtual-herbarium-test-otp-state` KV가 별도로 연결되어 있습니다. 기존 Worker와 DNS 레코드는 변경하지 않습니다.
+이 프로젝트만 사용하는 `virtual-herbarium-test-otp-state` KV가 별도로 연결되어 있습니다. 배포 대상은 이 Worker와 위 Custom Domain뿐입니다.
 
 먼저 민감한 값을 대시보드 또는 Wrangler secret으로 등록합니다.
 
@@ -73,18 +76,38 @@ npm run deploy
 
 ## GitHub 자동 배포
 
-`.github/workflows/deploy-worker.yml`은 수동 실행할 때만 새 Worker를 배포합니다. 저장소 Settings의 Actions secrets에 다음 두 값이 필요합니다.
+운영 Worker에는 GitHub `main`의 Cloudflare Workers Builds 연결이 있습니다. 별도의 `.github/workflows/deploy-worker.yml`도 `main` push 또는 수동 실행 시 배포를 시도하며, 이 경로에는 저장소 Settings의 Actions secrets 두 값이 필요합니다.
 
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN`
 
-Worker runtime secrets인 `TOTP_STORE_ENCRYPTION_KEY`, `AUTH_TOKEN_SECRET`, `ADMIN_TOTP_SECRET`은 GitHub에 넣지 않고 Cloudflare Worker 설정에 저장합니다.
+Worker runtime secrets인 `TOTP_STORE_ENCRYPTION_KEY`, `AUTH_TOKEN_SECRET`, `ADMIN_TOTP_SECRET`, `FIREBASE_SERVICE_ACCOUNT`는 GitHub에 넣지 않고 Cloudflare Worker 설정에 저장합니다.
 
-시험 주소에서 검증이 끝나기 전에는 `virtual-herbarium.columbina.kr` DNS를 변경하지 않습니다. 최종 전환은 기존 GitHub Pages CNAME을 새 Worker Custom Domain으로 교체하는 별도 단계입니다.
+`virtual-herbarium.columbina.kr`은 현재 Worker Custom Domain으로 연결되어 있습니다. 다른 Worker 또는 도메인의 설정을 변경하지 않습니다.
+
+## 표본 저장 서버 인증
+
+표본 수정에서 OTP가 통과한 뒤 `Missing or insufficient permissions`가 발생했던 원인은 브라우저가 Firebase 인증 없이 직접 쓰기를 시도했기 때문입니다. 새 Worker API에는 Google 서버 인증이 필요합니다. 이 설정이 없으면 표본 저장·삭제는 설명이 포함된 503 응답으로 중단됩니다.
+
+프로젝트 소유자가 다음 구성을 준비해야 합니다.
+
+1. Google 프로젝트 `hypnagogic-charmer-8cf5x`에 가상표본관 전용 서비스 계정을 만듭니다. 다른 앱이 공유하는 기본 Admin SDK 계정을 사용하지 않습니다.
+2. `roles/datastore.user`를 다음 IAM 조건으로 제한합니다. 다른 AI Studio 데이터베이스에는 권한을 부여하지 않습니다.
+
+   ```text
+   resource.name == "projects/hypnagogic-charmer-8cf5x/databases/ai-studio-virtualherbarium-457a0c18-aee3-4c39-ac7f-d22db488f2e4"
+   ```
+
+3. 이 서비스 계정의 JSON 키 전체를 `virtual-herbarium-test` Worker의 암호화된 Secret `FIREBASE_SERVICE_ACCOUNT`로 저장합니다. 저장소, 프런트엔드 환경 변수 또는 채팅에 키를 넣지 않습니다.
+4. 배포 후 기존 표본을 동일한 값으로 저장해 성공 응답과 재조회 결과를 확인합니다.
+
+Worker는 프로젝트, named database, `records` 컬렉션을 코드에서 고정합니다. 다른 프로젝트의 키와 임의 문서 경로는 거부합니다. IAM 조건 설정은 [Firestore 데이터베이스 액세스 권한 구성](https://firebase.google.com/docs/firestore/manage-databases#configure_per-database_access_permissions), 서버 인증은 [서비스 계정 OAuth 문서](https://developers.google.com/identity/protocols/oauth2/service-account)를 참고하세요.
 
 ## 보안 경계
 
-이미지 API와 OTP 관리 API는 Worker의 서명 토큰으로 보호됩니다. 하지만 현재 Firestore 쓰기는 브라우저에서 Firebase로 직접 수행되고 `firestore.rules`도 공개 쓰기를 허용합니다. 따라서 브라우저 UI를 우회한 Firestore 직접 변경까지 막으려면 다음 단계에서 데이터 쓰기 API도 Worker로 옮기고 Firestore Rules를 잠가야 합니다.
+표본·이미지 쓰기 API와 OTP 관리 API는 Worker의 서명 토큰으로 보호됩니다. Firestore REST 쓰기는 서비스 계정 IAM으로 인증하며, 일반 브라우저의 쓰기는 Firestore Rules가 제한합니다.
+
+현재 운영 Rules는 인증된 `editor`/`admin` 클레임을 요구합니다. 저장소의 Rules도 이에 맞춰 유지합니다. 이 저장소에는 Firebase Rules 자동 배포 설정이 없으며, 공유 Google 프로젝트 전체에 Rules를 배포하면 안 됩니다. 공개 쓰기로 Rules를 완화해서 OTP 저장 오류를 해결하지 않습니다.
 
 ## 기존 Express 서버
 

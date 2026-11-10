@@ -396,6 +396,13 @@ export default function HerbariumDetail() {
         imageUrl = undefined;
       }
 
+      const recordToSave = { ...record } as HerbariumRecord;
+      if (imageUrl) recordToSave.image = imageUrl;
+      else delete recordToSave.image;
+
+      await saveRecord(recordToSave, sessionToken);
+
+      // Keep the old image intact if saving the specimen fails.
       if (originalImageUrl && originalImageUrl !== imageUrl && !originalImageUrl.startsWith('data:')) {
         await fetch('/api/delete-image', {
           method: 'DELETE',
@@ -407,14 +414,11 @@ export default function HerbariumDetail() {
         }).catch(err => console.error("Failed to delete old image", err));
       }
       
-      const recordToSave = { ...record, image: imageUrl } as HerbariumRecord;
-      
-      await saveRecord(recordToSave);
       setOriginalImageUrl(imageUrl);
       
       // If collection number changed on an existing record, clean up the old document to prevent orphaned records
       if (!isNew && id && recordToSave.id !== id) {
-        await deleteRecord(id).catch(err => console.error("Failed to cleanup old record ID", err));
+        await deleteRecord(id, sessionToken).catch(err => console.error("Failed to cleanup old record ID", err));
       }
 
       if (isNew || recordToSave.id !== id) {
@@ -430,7 +434,7 @@ export default function HerbariumDetail() {
       setSelectedImageFile(null);
       setCooldownRemaining(20);
     } catch (err: any) {
-      setError(err.message);
+      setError(`${lang === 'ko' ? 'OTP 인증 후 표본 저장에 실패했습니다:' : 'OTP verified, but saving the specimen failed:'} ${err.message}`);
     } finally {
       setIsSaving(false);
     }
@@ -457,6 +461,7 @@ export default function HerbariumDetail() {
     
     try {
       setError('');
+      await deleteRecord(id, sessionToken);
       if (originalImageUrl && !originalImageUrl.startsWith('data:')) {
         await fetch('/api/delete-image', {
           method: 'DELETE',
@@ -467,7 +472,6 @@ export default function HerbariumDetail() {
           body: JSON.stringify({ imageUrl: originalImageUrl })
         }).catch(err => console.error("Failed to delete image", err));
       }
-      await deleteRecord(id);
       navigate('/data');
     } catch (err: any) {
       setError(err.message);

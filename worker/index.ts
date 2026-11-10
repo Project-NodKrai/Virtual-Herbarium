@@ -1,4 +1,5 @@
 import * as OTPAuth from 'otpauth';
+import { handleRecordRequest } from './firestore';
 
 interface TotpStoreDocument {
   schemaVersion: 1;
@@ -454,6 +455,11 @@ async function handleRemoveTotp(request: Request, env: Env): Promise<Response> {
 
 async function routeApi(request: Request, env: Env): Promise<Response> {
   const { pathname } = new URL(request.url);
+  const recordRoute = /^\/api\/records\/(INCH-PT\d{5})$/.exec(pathname);
+  if (recordRoute && (request.method === 'PUT' || request.method === 'DELETE')) {
+    await requireMutationToken(request, env);
+    return handleRecordRequest(request, env, recordRoute[1]);
+  }
   if (request.method === 'POST' && pathname === '/api/upload-image') return handleUpload(request, env);
   if (request.method === 'DELETE' && pathname === '/api/delete-image') return handleDeleteImage(request, env);
   if (request.method === 'GET' && pathname === '/api/proxy-logo') return handleLogo(env);

@@ -13,6 +13,7 @@ declare namespace Cloudflare {
 		TOTP_STORE_ENCRYPTION_KEY: string;
 		AUTH_TOKEN_SECRET: string;
 		ADMIN_TOTP_SECRET: string;
+		FIREBASE_SERVICE_ACCOUNT?: string;
 		HERBARIUM_BUCKET: R2Bucket;
 		ASSETS: Fetcher;
 	}
