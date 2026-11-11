@@ -45,7 +45,9 @@ class RecordError extends Error {
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers },
+    // Preserve the strong record ETag across Cloudflare compression. A transformed
+    // response otherwise receives a weak ETag that cannot authorize If-Match.
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store, no-transform', ...headers },
   });
 }
 

@@ -87,6 +87,7 @@ test('encrypted CRUD preserves images, uses version conditions and requires expl
   assert.equal(read.status, 200);
   assert.deepEqual(await read.json(), { record: fixture() });
   const oldEtag = read.headers.get('ETag')!;
+  assert.match(read.headers.get('Cache-Control')!, /no-transform/, 'The CDN must preserve the strong version used by If-Match');
   assert.equal((await handleRecordRequest(request(A, 'PUT', fixture()), env, A)).status, 428);
   const changed = { ...fixture(), koreanName: '수정된 표본' };
   delete changed.image;
