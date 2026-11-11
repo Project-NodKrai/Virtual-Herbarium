@@ -1,5 +1,5 @@
 import * as OTPAuth from 'otpauth';
-import { handleRecordRequest } from './firestore';
+import { handleRecordRequest, initializeRecordStore, restoreRecord } from './records';
 
 interface TotpStoreDocument {
   schemaVersion: 1;
@@ -455,9 +455,20 @@ async function handleRemoveTotp(request: Request, env: Env): Promise<Response> {
 
 async function routeApi(request: Request, env: Env): Promise<Response> {
   const { pathname } = new URL(request.url);
+  if (pathname === '/api/records/initialize' && request.method === 'POST') {
+    await requireMutationToken(request, env, true);
+    const body = await readJson(request);
+    return initializeRecordStore(env, body.records);
+  }
+  const restoreRoute = /^\/api\/records\/(INCH-PT\d{5})\/restore$/.exec(pathname);
+  if (restoreRoute && request.method === 'POST') {
+    await requireMutationToken(request, env, true);
+    return restoreRecord(env, restoreRoute[1]);
+  }
+  if (pathname === '/api/records' && request.method === 'GET') return handleRecordRequest(request, env);
   const recordRoute = /^\/api\/records\/(INCH-PT\d{5})$/.exec(pathname);
-  if (recordRoute && (request.method === 'PUT' || request.method === 'DELETE')) {
-    await requireMutationToken(request, env);
+  if (recordRoute && ['GET', 'PUT', 'DELETE'].includes(request.method)) {
+    if (request.method !== 'GET') await requireMutationToken(request, env);
     return handleRecordRequest(request, env, recordRoute[1]);
   }
   if (request.method === 'POST' && pathname === '/api/upload-image') return handleUpload(request, env);

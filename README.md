@@ -1,33 +1,76 @@
-# Virtual Herbarium_TEST
+# Virtual Herbarium
 
-React, Firestore, Cloudflare Workers, R2, Workers KV, TOTP를 사용하는 가상 식물표본관입니다.
+React, Cloudflare Workers, R2, Workers KV와 TOTP를 사용하는 가상 식물표본관입니다. 운영 주소는 `https://virtual-herbarium.columbina.kr`입니다.
 
-## Cloudflare 구성
+## 운영 구조
 
-- React 결과물은 Workers Static Assets로 제공합니다.
-- `/api/*` 요청만 `worker/index.ts`가 처리합니다.
-- 이미지는 `HERBARIUM_BUCKET` R2 바인딩을 통해 `virtual-herbarium` 버킷에 저장합니다.
-- OTP 사용자 목록은 `OTP_STATE` KV에 AES-256-GCM 암호문으로 저장합니다.
-- OTP 검증에 성공하면 5분짜리 서명 토큰을 발급합니다. 표본 저장·삭제, 이미지 업로드·삭제와 OTP 관리 API는 이 토큰을 확인합니다.
-- 표본 조회는 Firestore SDK로 직접 수행하고, 쓰기는 Worker의 `/api/records/INCH-PT00000` 형태의 API를 거칩니다.
-- 조회·검색·상세 열람에는 OTP를 요구하지 않습니다.
+- React 빌드 결과물은 `virtual-herbarium-test` Worker의 Static Assets로 제공합니다.
+- 표본의 조회·추가·수정·삭제는 모두 같은 출처의 `/api/records` API를 사용합니다. 운영 프런트엔드는 Firebase에 직접 접근하지 않습니다.
+- 표본 데이터는 `HERBARIUM_BUCKET -> virtual-herbarium` R2 버킷의 `virtual-herbarium/records/v1/` 접두사 아래에 암호화된 JSON 객체로 저장합니다. 표본 ID는 `INCH-PT`와 숫자 5자리로 제한합니다.
+- 표본 이미지와 로고는 기존 R2 버킷을 사용합니다. 이미지 공개 주소는 `https://data-herbarium.columbina.kr`입니다.
+- OTP 사용자 목록은 전용 `OTP_STATE -> virtual-herbarium-test-otp-state` KV에 AES-256-GCM 암호문으로 저장합니다.
+- OTP 검증에 성공하면 5분짜리 서명 토큰을 발급합니다. 표본과 이미지의 변경 API는 이 토큰을 확인하며, 초기 복사·복구·OTP 관리에는 관리자 권한을 요구합니다.
+- 표본 목록·검색·상세·갤러리 열람은 공개됩니다.
 
-기존 `nod-krai` Worker와 `pos-db` 버킷은 이 프로젝트와 무관하며 변경하지 않습니다. 이 프로젝트는 별도 Worker 이름인 `virtual-herbarium-test`를 사용합니다.
+기존 `nod-krai` Worker와 `pos-db` 버킷은 별도 프로젝트입니다. 이 저장소의 배포 대상은 `virtual-herbarium-test`와 위 운영 Custom Domain이며, 다른 프로젝트의 바인딩·DNS·데이터를 변경하지 않습니다.
 
-## OTP 초기화 방지
+## 표본 API와 변경 충돌 방지
 
-Worker 인스턴스 메모리에 OTP 비밀값을 저장하지 않습니다. 암호화된 KV 저장본을 매번 읽으므로 새 배포나 Worker 재시작 후에도 OTP가 유지됩니다.
+| 요청 | 동작 | 인증과 조건 |
+| --- | --- | --- |
+| `GET /api/records?cursor=...` | 표본 목록 한 페이지 | 공개, `{records, cursor}` 응답 |
+| `GET /api/records/:id` | 표본 상세 | 공개, `{record}`와 `ETag` 응답 |
+| `PUT /api/records/:id` | 표본 생성 | OTP Bearer 토큰, `If-None-Match: *` |
+| `PUT /api/records/:id` | 기존 표본 수정 | OTP Bearer 토큰, 상세 조회에서 받은 `If-Match` |
+| `DELETE /api/records/:id` | 복구 가능한 표본 삭제 | OTP Bearer 토큰, 상세 조회에서 받은 `If-Match` |
+| `POST /api/records/:id/restore` | 삭제한 표본 복구 | 관리자 OTP Bearer 토큰 |
+| `POST /api/records/initialize` | 기존 표본 최초 복사 | 관리자 OTP Bearer 토큰, `{records: [...]}` |
 
-`TOTP_STORE_ALLOW_BOOTSTRAP`은 기본적으로 `false`입니다. 암호화된 저장본이 사라졌을 때 자동으로 새 OTP를 만들지 않고 오류로 중단합니다.
+목록 API는 페이지당 R2 객체를 최대 25개 읽고, 객체 읽기의 동시 실행을 최대 4개로 제한합니다. 프런트엔드는 `cursor`가 `null`이 될 때까지 다음 페이지를 조회합니다. 삭제된 객체만 있는 페이지도 다음 `cursor`가 있으면 계속 읽습니다.
 
-최초 한 번만 다음 중 한 방법으로 초기화합니다.
+생성은 같은 번호의 객체를 덮어쓰지 않습니다. 수정·삭제는 조회 당시 `ETag`와 현재 버전이 일치해야 합니다. 버전 충돌이나 중복 번호는 `409`, 변경 조건 누락은 `428`로 중단하므로 새로고침 후 다시 시도해야 합니다. R2 쓰기에도 조건을 적용해 동시 변경을 검사합니다.
 
-1. 기존 인증기의 Base32 비밀값을 `ADMIN_TOTP_SECRET` Worker secret으로 설정하고 bootstrap을 활성화합니다.
-2. `ADMIN_TOTP_SECRET`을 설정하지 않고 bootstrap을 활성화한 다음 `/security`에서 새 관리자 QR을 등록합니다.
+삭제는 암호화된 객체에 삭제 상태를 기록하는 방식입니다. 공개 상세 API는 `404`를 반환하고 목록에서도 제외합니다. 복구를 위해 표본 정보와 연결 이미지 파일을 보존하며, 관리자 복구 API는 동일 표본을 다시 활성화합니다. 일반 생성·수정 API로 삭제된 표본을 덮어쓰거나 복구할 수 없습니다. 별도의 휴지통 화면은 아직 없습니다.
 
-저장 상태를 확인한 뒤 반드시 `TOTP_STORE_ALLOW_BOOTSTRAP`을 다시 `false`로 배포합니다. 기존 KV 저장본이 있으면 `ADMIN_TOTP_SECRET`은 절대로 덮어쓰지 않습니다.
+## 암호화와 OTP 유지
 
-> 이전에 외부에 노출된 OTP seed 또는 R2 API key는 재사용하지 마세요. Worker는 R2 API key 대신 R2 binding을 사용합니다.
+R2 버킷에는 이미지용 공개 도메인이 연결되어 있으므로 표본 JSON과 삭제 상태를 평문으로 저장하지 않습니다. `worker/records.ts`는 AES-256-GCM과 매번 새 12바이트 IV를 사용합니다. 객체 경로를 AAD에 포함해 다른 표본 경로로 암호문을 복사해도 해독되지 않게 합니다.
+
+표본 암호화 키는 기존 `TOTP_STORE_ENCRYPTION_KEY`에서 `virtual-herbarium:records:key:v1` 문맥으로 별도 파생합니다. OTP 저장소와 표본 저장소의 파생 문맥·AAD가 다릅니다. 이 루트 Secret을 변경하려면 **OTP와 표본 데이터 모두 기존 키로 읽어 새 키로 재암호화**해야 합니다. 기존 Secret을 임의로 교체하면 저장된 OTP와 표본을 읽지 못합니다.
+
+OTP 비밀값은 Worker 메모리가 아닌 암호화된 KV 저장본에 유지됩니다. 새 배포나 Worker 재시작은 OTP를 초기화하지 않습니다. `TOTP_STORE_ALLOW_BOOTSTRAP`은 운영에서 `false`이며, 저장본이 없어져도 자동으로 새 OTP를 만들지 않습니다. 기존 저장본이 있으면 `ADMIN_TOTP_SECRET`으로 덮어쓰지 않습니다.
+
+## 기존 Firebase 표본의 초기 복사
+
+기존 Google AI Studio 프로젝트의 서버 인증 키 발급 제한을 피하기 위해 운영 표본 저장소를 위 전용 R2 접두사로 전환합니다. Google IAM 변경, 서비스 계정 키 또는 Google 프로젝트 요금제 전환이 필요하지 않습니다. 기존 Firebase 프로젝트와 원본 데이터는 보존하며 이 API는 Firebase에 쓰지 않습니다.
+
+초기 복사 대상은 기존 공개 표본 `INCH-PT00000` 1건입니다. 공개 사이트에서 읽은 전체 필드와 이미지 URL을 저장소 밖의 작업 산출물 `outputs/herbarium-import.json`에 백업합니다. 이 백업을 프런트엔드 번들이나 저장소에 포함하지 않습니다.
+
+전환 절차는 다음과 같습니다.
+
+1. 변경 브랜치를 Worker 미리보기 버전으로 업로드합니다. 초기화 완료 전 표본 API는 빈 목록을 정상 결과로 반환하지 않고 `503`으로 중단합니다.
+2. 관리자 OTP로 발급받은 토큰을 사용해 미리보기의 `POST /api/records/initialize`에 `{records: [...]}`를 전달합니다.
+3. 각 표본 객체를 암호화해 생성하고, 전체 복사가 끝난 뒤 암호화된 `_manifest.json`을 완료 상태로 기록합니다. 기존 객체가 있으면 동일한 데이터인지 확인하고, 내용이 다르면 덮어쓰지 않고 중단합니다.
+4. 미리보기에서 개별 표본을 다시 조회해 백업의 전체 필드·이미지 URL과 비교하고 추가·수정·삭제·관리자 복구를 검증합니다.
+5. 검증한 변경을 `main`에 반영해 운영 트래픽을 전환합니다.
+
+초기 복사 중 실패하면 동일한 표본 배열로 재시도할 수 있습니다. 완료된 저장소의 초기화 재호출은 `409`이며, 일반 조회·변경 API는 완료 manifest가 있어야 동작합니다. 초기화 API는 데이터 교체나 반복 동기화 용도가 아닙니다.
+
+## Cloudflare 설정과 배포
+
+`wrangler.jsonc`에 Worker 이름, 운영 Custom Domain, R2·KV·Assets 바인딩이 고정되어 있습니다. 기존 리소스를 사용하므로 새 R2 버킷이나 Google 서비스 계정을 만들지 않습니다.
+
+운영 Secret은 Cloudflare Worker 설정에만 보관합니다.
+
+- `TOTP_STORE_ENCRYPTION_KEY`: OTP와 표본 암호화에 쓰는 기존 루트 Secret.
+- `AUTH_TOKEN_SECRET`: OTP 검증 후 발급하는 서명 토큰의 기존 Secret.
+- `ADMIN_TOTP_SECRET`: 최초 관리자 등록용 선택 값. 기존 KV 저장본을 대체하지 않습니다.
+
+Secret은 GitHub, 프런트엔드 환경 변수, 로그 또는 채팅에 넣지 않습니다. 운영 R2 접근에는 API 키 대신 Worker 바인딩을 사용합니다. Firestore용 `FIREBASE_SERVICE_ACCOUNT`는 운영에 필요하지 않습니다.
+
+Cloudflare Workers Builds는 GitHub `main` 변경을 빌드해 `npx wrangler deploy`로 운영 배포합니다. 다른 브랜치는 `npx wrangler versions upload`로 미리보기 버전을 만들며 운영 트래픽을 전환하지 않습니다.
+
+별도 `.github/workflows/deploy-worker.yml`도 `main` push 또는 수동 실행 시 배포를 시도합니다. 이 GitHub Actions 경로를 사용하려면 저장소 Actions secrets에 `CLOUDFLARE_ACCOUNT_ID`와 `CLOUDFLARE_API_TOKEN`이 필요합니다. Cloudflare의 네이티브 GitHub 빌드 연결과는 별도 경로입니다.
 
 ## 로컬 검증
 
@@ -36,86 +79,20 @@ npm ci
 npm test
 npm run lint
 npm run build
+npx wrangler deploy --dry-run
 npx wrangler dev
 ```
 
-`wrangler dev`는 기본적으로 로컬 KV와 로컬 R2 데이터를 사용합니다.
+테스트는 실제 운영 데이터나 OTP를 사용하지 않는 격리된 저장소 모형으로 암호화, 초기 복사, 충돌 방지, 추가·수정·삭제·복구, 페이지 제한과 OTP 화면 전환을 확인합니다. `wrangler dev`는 기본적으로 로컬 R2·KV를 사용하므로 운영 데이터를 자동으로 가져오지 않습니다.
 
-## 최초 Cloudflare 배포
+## 비용
 
-`wrangler.jsonc`에는 다음이 설정되어 있습니다.
+기존 R2 버킷을 사용하며 새 유료 플랜을 신청하지 않습니다. R2 Standard의 월 무료 포함량은 저장 용량 10 GB-month, Class A 요청 100만 건, Class B 요청 1,000만 건입니다. 포함량을 넘으면 기존 계정의 과금 설정에 따라 사용량 요금이 발생할 수 있습니다. [Cloudflare R2 공식 요금표](https://developers.cloudflare.com/r2/pricing/)
 
-- 새 Worker: `virtual-herbarium-test`
-- 기존 R2 버킷 binding: `HERBARIUM_BUCKET -> virtual-herbarium`
-- 새 전용 KV binding: `OTP_STATE -> virtual-herbarium-test-otp-state`
-- 시험 주소: `*.workers.dev`
-- 운영 Custom Domain: `virtual-herbarium.columbina.kr`
+목록 페이지 크기와 동시 읽기 수 제한은 한 요청의 저장소 작업량을 줄입니다. **월 과금 하드캡이나 무료 포함량 초과 시 자동 차단은 구현되어 있지 않으며, 무과금을 보장하지 않습니다.** R2 외의 Worker·KV 등은 해당 서비스와 계정의 요금·한도가 별도로 적용됩니다. 표본 삭제 후에도 복구용 데이터와 이미지는 저장 용량에 포함됩니다.
 
-이 프로젝트만 사용하는 `virtual-herbarium-test-otp-state` KV가 별도로 연결되어 있습니다. 배포 대상은 이 Worker와 위 Custom Domain뿐입니다.
+## 기존 코드와 후속 작업
 
-먼저 민감한 값을 대시보드 또는 Wrangler secret으로 등록합니다.
+`server.ts`, Firebase 설정 및 관련 파일은 이전 Express 서버 비교·복구용으로 남아 있습니다. 현재 운영 Worker의 표본 API 경로에서는 사용하지 않습니다. 기존 Node 서버 빌드는 `npm run build:legacy`, 실행은 `npm run start:legacy`로 수행합니다.
 
-```bash
-npx wrangler secret put TOTP_STORE_ENCRYPTION_KEY
-npx wrangler secret put AUTH_TOKEN_SECRET
-```
-
-각 값은 서로 다른 32자 이상의 무작위 문자열을 사용합니다. 기존 인증기 OTP를 그대로 이어 쓸 때만 아래 secret도 추가합니다.
-
-```bash
-npx wrangler secret put ADMIN_TOTP_SECRET
-```
-
-첫 초기화 때만 `wrangler.jsonc`의 `TOTP_STORE_ALLOW_BOOTSTRAP`을 `true`로 바꿔 배포합니다.
-
-```bash
-npm run deploy
-```
-
-`/api/totp/status`와 `/security`에서 저장 상태를 확인한 다음 bootstrap을 `false`로 되돌려 다시 배포합니다.
-
-## GitHub 자동 배포
-
-운영 Worker에는 GitHub `main`의 Cloudflare Workers Builds 연결이 있습니다. 별도의 `.github/workflows/deploy-worker.yml`도 `main` push 또는 수동 실행 시 배포를 시도하며, 이 경로에는 저장소 Settings의 Actions secrets 두 값이 필요합니다.
-
-- `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_API_TOKEN`
-
-Worker runtime secrets인 `TOTP_STORE_ENCRYPTION_KEY`, `AUTH_TOKEN_SECRET`, `ADMIN_TOTP_SECRET`, `FIREBASE_SERVICE_ACCOUNT`는 GitHub에 넣지 않고 Cloudflare Worker 설정에 저장합니다.
-
-`virtual-herbarium.columbina.kr`은 현재 Worker Custom Domain으로 연결되어 있습니다. 다른 Worker 또는 도메인의 설정을 변경하지 않습니다.
-
-## 표본 저장 서버 인증
-
-표본 수정에서 OTP가 통과한 뒤 `Missing or insufficient permissions`가 발생했던 원인은 브라우저가 Firebase 인증 없이 직접 쓰기를 시도했기 때문입니다. 새 Worker API에는 Google 서버 인증이 필요합니다. 이 설정이 없으면 표본 저장·삭제는 설명이 포함된 503 응답으로 중단됩니다.
-
-프로젝트 소유자가 다음 구성을 준비해야 합니다.
-
-현재 운영 Google 프로젝트는 AI Studio Starter 등급입니다. 이 유형은 Google이 IAM과 조직 정책을 관리하므로 로그인 계정에 서비스 계정 생성·키 발급 권한이 없습니다. [Starter Tier 공식 안내](https://docs.cloud.google.com/docs/starter-tier#upgrade-your-starter-tier-project)에 따르면 일반 프로젝트로의 전환은 결제 계정 연결 및 약관 동의를 요구합니다. 같은 프로젝트에 다른 앱의 데이터베이스도 있으므로 전환 시 이들의 비용·관리 범위까지 고려해야 합니다. 이 저장소의 변경은 프로젝트 전환, 결제 연결, IAM 변경을 수행하지 않습니다.
-
-1. Google 프로젝트 `hypnagogic-charmer-8cf5x`에 가상표본관 전용 서비스 계정을 만듭니다. 다른 앱이 공유하는 기본 Admin SDK 계정을 사용하지 않습니다.
-2. `roles/datastore.user`를 다음 IAM 조건으로 제한합니다. 다른 AI Studio 데이터베이스에는 권한을 부여하지 않습니다.
-
-   ```text
-   resource.name == "projects/hypnagogic-charmer-8cf5x/databases/ai-studio-virtualherbarium-457a0c18-aee3-4c39-ac7f-d22db488f2e4"
-   ```
-
-3. 이 서비스 계정의 JSON 키 전체를 `virtual-herbarium-test` Worker의 암호화된 Secret `FIREBASE_SERVICE_ACCOUNT`로 저장합니다. 저장소, 프런트엔드 환경 변수 또는 채팅에 키를 넣지 않습니다.
-4. 배포 후 기존 표본을 동일한 값으로 저장해 성공 응답과 재조회 결과를 확인합니다.
-
-Worker는 프로젝트, named database, `records` 컬렉션을 코드에서 고정합니다. 다른 프로젝트의 키와 임의 문서 경로는 거부합니다. IAM 조건 설정은 [Firestore 데이터베이스 액세스 권한 구성](https://firebase.google.com/docs/firestore/manage-databases#configure_per-database_access_permissions), 서버 인증은 [서비스 계정 OAuth 문서](https://developers.google.com/identity/protocols/oauth2/service-account)를 참고하세요.
-
-## 보안 경계
-
-표본·이미지 쓰기 API와 OTP 관리 API는 Worker의 서명 토큰으로 보호됩니다. Firestore REST 쓰기는 서비스 계정 IAM으로 인증하며, 일반 브라우저의 쓰기는 Firestore Rules가 제한합니다.
-
-현재 운영 Rules는 인증된 `editor`/`admin` 클레임을 요구합니다. 저장소의 Rules도 이에 맞춰 유지합니다. 이 저장소에는 Firebase Rules 자동 배포 설정이 없으며, 공유 Google 프로젝트 전체에 Rules를 배포하면 안 됩니다. 공개 쓰기로 Rules를 완화해서 OTP 저장 오류를 해결하지 않습니다.
-
-## 기존 Express 서버
-
-`server.ts`는 마이그레이션 비교와 비상 복구를 위해 그대로 유지했습니다. 다음 명령으로만 기존 Node 서버 빌드를 만들 수 있습니다.
-
-```bash
-npm run build:legacy
-npm run start:legacy
-```
+모바일 네비게이션바(후속)

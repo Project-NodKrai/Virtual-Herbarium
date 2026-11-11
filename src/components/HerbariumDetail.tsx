@@ -400,26 +400,10 @@ export default function HerbariumDetail() {
       if (imageUrl) recordToSave.image = imageUrl;
       else delete recordToSave.image;
 
-      await saveRecord(recordToSave, sessionToken);
+      await saveRecord(recordToSave, sessionToken, { create: isNew });
 
-      // Keep the old image intact if saving the specimen fails.
-      if (originalImageUrl && originalImageUrl !== imageUrl && !originalImageUrl.startsWith('data:')) {
-        await fetch('/api/delete-image', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${sessionToken}`,
-          },
-          body: JSON.stringify({ imageUrl: originalImageUrl })
-        }).catch(err => console.error("Failed to delete old image", err));
-      }
-      
+      // Images are retained so deleted specimens can be recovered by an administrator.
       setOriginalImageUrl(imageUrl);
-      
-      // If collection number changed on an existing record, clean up the old document to prevent orphaned records
-      if (!isNew && id && recordToSave.id !== id) {
-        await deleteRecord(id, sessionToken).catch(err => console.error("Failed to cleanup old record ID", err));
-      }
 
       if (isNew || recordToSave.id !== id) {
         navigate(`/data/${recordToSave.id}`, { replace: true });
@@ -446,12 +430,16 @@ export default function HerbariumDetail() {
     
     // Client-side validation before asking for OTP
     const targetId = record.collectionNo;
+    if (!isNew && targetId !== id) {
+      setError(lang === 'ko' ? '기존 표본의 채집 번호는 변경할 수 없습니다.' : 'The collection number of an existing specimen cannot be changed.');
+      return;
+    }
     if (!/^INCH-PT\d{5}$/.test(targetId || '')) {
       setError("ID (Coll. No.) must be exactly 'INCH-PT' followed by 5 digits (e.g. INCH-PT00000).");
       return;
     }
 
-    // Authentication happens immediately before every Firestore/R2 mutation.
+    // Authentication happens immediately before every specimen/image mutation.
     setPendingMutation('save');
   };
 
@@ -462,16 +450,6 @@ export default function HerbariumDetail() {
     try {
       setError('');
       await deleteRecord(id, sessionToken);
-      if (originalImageUrl && !originalImageUrl.startsWith('data:')) {
-        await fetch('/api/delete-image', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${sessionToken}`,
-          },
-          body: JSON.stringify({ imageUrl: originalImageUrl })
-        }).catch(err => console.error("Failed to delete image", err));
-      }
       navigate('/data');
     } catch (err: any) {
       setError(err.message);
@@ -625,7 +603,7 @@ export default function HerbariumDetail() {
           <div className="bg-gray-50/50 p-4 rounded-md border border-gray-100">
             <Field label={t[lang].collector} name="collector" value={record.collector} isEditing={isEditing} onChange={handleChange} />
             <Field label={t[lang].collDate} name="collDate" value={record.collDate} isEditing={isEditing} onChange={handleChange} />
-            <Field label={t[lang].collNo} name="collectionNo" value={record.collectionNo} isEditing={isEditing} onChange={handleChange} />
+            <Field label={t[lang].collNo} name="collectionNo" value={record.collectionNo} isEditing={isEditing && isNew} onChange={handleChange} />
           </div>
         </div>
 
@@ -751,7 +729,7 @@ export default function HerbariumDetail() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Record</h3>
-            <p className="text-gray-600 mb-6 text-sm">Are you sure you want to delete this record? This action cannot be undone.</p>
+            <p className="text-gray-600 mb-6 text-sm">{lang === 'ko' ? '이 표본을 목록에서 삭제할까요? 관리자에게 복구를 요청할 수 있습니다.' : 'Delete this specimen from the list? An administrator can restore it.'}</p>
             <div className="flex justify-end space-x-3">
               <button 
                 onClick={() => setShowDeleteConfirm(false)}
