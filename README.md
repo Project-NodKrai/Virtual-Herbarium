@@ -95,4 +95,4 @@ npx wrangler dev
 
 `server.ts`, Firebase 설정 및 관련 파일은 이전 Express 서버 비교·복구용으로 남아 있습니다. 현재 운영 Worker의 표본 API 경로에서는 사용하지 않습니다. 기존 Node 서버 빌드는 `npm run build:legacy`, 실행은 `npm run start:legacy`로 수행합니다.
 
-모바일 네비게이션바(후속)
+768px 미만 화면에서는 홈·표본관·갤러리 하단 탭과 상단 전체 메뉴를 제공합니다. 통계와 OTP 관리는 전체 메뉴에서 이동합니다. 768px 이상에서는 기존 상단 메뉴와 사이드바를 유지합니다.

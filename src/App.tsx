@@ -5,6 +5,7 @@
 
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Header from './components/Header';
+import MobileNavigation from './components/MobileNavigation';
 import Sidebar from './components/Sidebar';
 import Home from './components/Home';
 import Gallery from './components/Gallery';
@@ -18,7 +19,7 @@ function AppLayout() {
   const isHome = location.pathname === '/home' || location.pathname === '/';
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#f8fafc] font-sans text-gray-900">
+    <div className="min-h-screen flex flex-col bg-[#f8fafc] font-sans text-gray-900 pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0">
       <Header />
       
       <main className={`flex-1 w-full ${isHome ? '' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}`}>
@@ -53,6 +54,7 @@ function AppLayout() {
           </div>
         </footer>
       )}
+      <MobileNavigation />
     </div>
   );
 }

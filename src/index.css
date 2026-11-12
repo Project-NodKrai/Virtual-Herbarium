@@ -1,1 +1,9 @@
 @import "tailwindcss";
+
+.mobile-menu::backdrop {
+  background: rgb(15 23 42 / 40%);
+}
+
+html:has(.mobile-menu[open]) {
+  overflow: hidden;
+}
