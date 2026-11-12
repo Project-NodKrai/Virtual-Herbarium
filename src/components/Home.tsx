@@ -24,7 +24,7 @@ export default function Home() {
   };
 
   return (
-    <div className="flex-1 w-full flex flex-col relative h-full min-h-[calc(100vh-73px)]">
+    <div className="flex-1 w-full flex flex-col relative h-full min-h-[calc(100svh-8rem-2px-env(safe-area-inset-bottom))] md:min-h-[calc(100vh-73px)]">
       {/* Background Image / Overlay */}
       <div 
         className="absolute inset-0 bg-cover bg-center z-0"

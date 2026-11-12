@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import { MobileMenu } from './MobileNavigation';
 
 export default function Header() {
   const location = useLocation();
@@ -7,14 +8,14 @@ export default function Header() {
   return (
     <header className="bg-white border-b border-gray-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-20 items-center">
+        <div className="flex justify-between h-16 md:h-20 items-center gap-2">
           <Link to="/home" className="flex items-center group">
             <img 
               src="https://data-herbarium.columbina.kr/virtual-herbarium/UI/logo.svg" 
               alt="Virtual Herbarium Logo" 
-              className="h-10 w-auto mr-3 object-contain group-hover:scale-105 transition-transform" 
+              className="h-8 md:h-10 w-auto mr-2 md:mr-3 object-contain group-hover:scale-105 transition-transform"
             />
-            <span className="font-bold text-2xl text-gray-900 tracking-tight">Virtual Herbarium</span>
+            <span className="font-bold text-lg sm:text-2xl text-gray-900 tracking-tight">Virtual Herbarium</span>
           </Link>
           <nav className="hidden md:flex space-x-8 items-center">
             <Link
@@ -51,6 +52,7 @@ export default function Header() {
               Contacts
             </a>
           </nav>
+          <MobileMenu />
         </div>
       </div>
     </header>
