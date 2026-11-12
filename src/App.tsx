@@ -19,7 +19,7 @@ function AppLayout() {
   const isHome = location.pathname === '/home' || location.pathname === '/';
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#f8fafc] font-sans text-gray-900 pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0">
+    <div className="min-h-screen flex flex-col bg-[#f8fafc] font-sans text-gray-900 pb-[calc(4rem+1px+env(safe-area-inset-bottom))] md:pb-0">
       <Header />
       
       <main className={`flex-1 w-full ${isHome ? '' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}`}>
